@@ -928,7 +928,7 @@ async def test_video_generation_node(api_server: str, model: str, image_input: b
     [pytest.param(SamplingCase(kind=SamplingKind.VIDEO_FL2VA, sampling_params=None), id="fl2va")],
     indirect=True,
 )
-async def test_video_generation_node_minimax_h3_fl2va(api_server: str):
+async def test_video_generation_node_minimax_h3_fl2va(api_server: str, sampling_case: SamplingCase):
     node = VLLMOmniGenerateVideo()
     first_frame = torch.zeros((1, VIDEO_HEIGHT, VIDEO_WIDTH, 3), dtype=torch.float32)
     last_frame = torch.ones((1, VIDEO_HEIGHT, VIDEO_WIDTH, 3), dtype=torch.float32)
