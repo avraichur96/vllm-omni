@@ -29,6 +29,7 @@ from comfyui_vllm_omni.nodes import (
     VLLMOmniFastH3Deployment,
     VLLMOmniGenerateImage,
     VLLMOmniGenerateVideo,
+    VLLMOmniMiniMaxH3ImageToVideo,
     VLLMOmniTTS,
     VLLMOmniUnderstanding,
     VLLMOmniVideoReferences,
@@ -974,8 +975,8 @@ async def test_video_generation_node(api_server: str, model: str, image_input: b
     [pytest.param(SamplingCase(kind=SamplingKind.VIDEO_FL2VA, sampling_params=None), id="fl2va")],
     indirect=True,
 )
-async def test_video_generation_node_minimax_h3_fl2va(api_server: str, sampling_case: SamplingCase):
-    node = VLLMOmniGenerateVideo()
+async def test_minimax_h3_image_to_video_node(api_server: str, sampling_case: SamplingCase):
+    node = VLLMOmniMiniMaxH3ImageToVideo()
     first_frame = torch.zeros((1, VIDEO_HEIGHT, VIDEO_WIDTH, 3), dtype=torch.float32)
     last_frame = torch.ones((1, VIDEO_HEIGHT, VIDEO_WIDTH, 3), dtype=torch.float32)
 
@@ -992,7 +993,7 @@ async def test_video_generation_node_minimax_h3_fl2va(api_server: str, sampling_
             width=VIDEO_WIDTH,
             height=VIDEO_HEIGHT,
             fps=VIDEO_FPS,
-            num_frames=VIDEO_NUM_FRAMES,
+            duration=VIDEO_DURATION,
             model_params=H3_MODEL_PARAMS,
             **frame_inputs,
         )
@@ -1002,11 +1003,38 @@ async def test_video_generation_node_minimax_h3_fl2va(api_server: str, sampling_
         assert isinstance(result[0], VideoInput)
 
 
-def test_video_generation_node_exposes_explicit_keyframe_inputs():
-    optional_inputs = VLLMOmniGenerateVideo.INPUT_TYPES()["optional"]
+def test_minimax_h3_image_to_video_node_inputs():
+    generic_inputs = VLLMOmniGenerateVideo.INPUT_TYPES()["optional"]
+    h3_inputs = VLLMOmniMiniMaxH3ImageToVideo.INPUT_TYPES()
 
-    assert optional_inputs["first_frame"] == ("IMAGE",)
-    assert optional_inputs["last_frame"] == ("IMAGE",)
+    assert "first_frame" not in generic_inputs
+    assert "last_frame" not in generic_inputs
+    assert generic_inputs["frame"] == ("IMAGE",)
+    assert h3_inputs["optional"]["first_frame"] == ("IMAGE",)
+    assert h3_inputs["optional"]["last_frame"] == ("IMAGE",)
+    assert "frame" not in h3_inputs["optional"]
+    assert "references" not in h3_inputs["optional"]
+    assert h3_inputs["required"]["model"][1]["default"] == "MiniMaxAI/MiniMax-H3"
+    assert h3_inputs["required"]["fps"][1]["default"] == 24
+    assert "num_frames" not in h3_inputs["required"]
+    assert round(h3_inputs["required"]["duration"][1]["default"] * 24) == 124
+
+
+def test_minimax_h3_image_to_video_node_requires_a_frame():
+    result = VLLMOmniMiniMaxH3ImageToVideo.VALIDATE_INPUTS(
+        url="http://localhost:8000/v1",
+        model="MiniMaxAI/MiniMax-H3",
+    )
+
+    assert result == "Connect at least one of first_frame or last_frame."
+    assert (
+        VLLMOmniMiniMaxH3ImageToVideo.VALIDATE_INPUTS(
+            url="http://localhost:8000/v1",
+            model="MiniMaxAI/MiniMax-H3",
+            first_frame=object(),
+        )
+        is True
+    )
 
 
 @pytest.mark.asyncio
@@ -1018,16 +1046,8 @@ def test_video_generation_node_exposes_explicit_keyframe_inputs():
         ({"last_frame": object(), "references": {}}, "first_frame/last_frame or references"),
     ],
 )
-async def test_video_generation_node_rejects_conflicting_frame_inputs(kwargs: dict, message: str):
+async def test_video_generation_client_rejects_conflicting_frame_inputs(kwargs: dict, message: str):
     node = VLLMOmniGenerateVideo()
-    validation_result = node.VALIDATE_INPUTS(
-        url="http://localhost:8000/v1",
-        model="MiniMaxAI/MiniMax-H3",
-        **kwargs,
-    )
-
-    assert isinstance(validation_result, str)
-    assert message in validation_result
 
     with pytest.raises(ValueError, match=message):
         await node.generate(
@@ -1037,7 +1057,7 @@ async def test_video_generation_node_rejects_conflicting_frame_inputs(kwargs: di
             width=VIDEO_WIDTH,
             height=VIDEO_HEIGHT,
             fps=VIDEO_FPS,
-            num_frames=VIDEO_NUM_FRAMES,
+            duration=VIDEO_DURATION,
             **kwargs,
         )
 

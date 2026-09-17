@@ -20,6 +20,7 @@ from .comfyui_vllm_omni.nodes import (
     VLLMOmniFastH3Deployment,
     VLLMOmniGenerateImage,
     VLLMOmniGenerateVideo,
+    VLLMOmniMiniMaxH3ImageToVideo,
     VLLMOmniMiniMaxH3Params,
     VLLMOmniQwenTTSParams,
     VLLMOmniRemoteLoRA,
@@ -36,6 +37,7 @@ NODE_CLASS_MAPPINGS = {
     # === Generation ===
     "VLLMOmniGenerateImage": VLLMOmniGenerateImage,
     "VLLMOmniGenerateVideo": VLLMOmniGenerateVideo,
+    "VLLMOmniMiniMaxH3ImageToVideo": VLLMOmniMiniMaxH3ImageToVideo,
     "VLLMOmniUnderstanding": VLLMOmniUnderstanding,
     "VLLMOmniTTS": VLLMOmniTTS,
     "VLLMOmniVoiceClone": VLLMOmniVoiceClone,
@@ -56,6 +58,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     # === Generation ===
     "VLLMOmniGenerateImage": "Generate Image",
     "VLLMOmniGenerateVideo": "Generate Video",
+    "VLLMOmniMiniMaxH3ImageToVideo": "MiniMax-H3 Image to Video",
     "VLLMOmniUnderstanding": "Multimodality Understanding",
     "VLLMOmniTTS": "TTS (Text to Speech)",
     "VLLMOmniVoiceClone": "TTS Voice Cloning",

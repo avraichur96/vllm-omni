@@ -203,8 +203,6 @@ class VLLMOmniGenerateVideo(_VLLMOmniGenerateBase):
             },
             "optional": {
                 "frame": ("IMAGE",),
-                "first_frame": ("IMAGE",),
-                "last_frame": ("IMAGE",),
                 "references": ("VIDEO_REFERENCES",),
                 "sampling_params": ("SAMPLING_PARAMS",),
                 "lora": ("REMOTE_LORA",),
@@ -218,25 +216,12 @@ class VLLMOmniGenerateVideo(_VLLMOmniGenerateBase):
     FUNCTION = "generate"
 
     @classmethod
-    def VALIDATE_INPUTS(
-        cls,
-        url,
-        model,
-        frame=None,
-        first_frame=None,
-        last_frame=None,
-        references=None,
-        **_kwargs,
-    ) -> str | Literal[True]:
+    def VALIDATE_INPUTS(cls, url, model, frame=None, references=None, **_kwargs) -> str | Literal[True]:
         base = super().VALIDATE_INPUTS(url, model)
         if base is not True:
             return base
         if frame is not None and references is not None:
             return "Provide only one of frame or references, not both."
-        if frame is not None and (first_frame is not None or last_frame is not None):
-            return "Provide either frame or first_frame/last_frame, not both."
-        if references is not None and (first_frame is not None or last_frame is not None):
-            return "Provide either first_frame/last_frame or references, not both."
         return True
 
     async def generate(
@@ -344,6 +329,55 @@ class VLLMOmniGenerateVideo(_VLLMOmniGenerateBase):
             model_params=model_params,
         )
         return (output,)
+
+
+class VLLMOmniMiniMaxH3ImageToVideo(VLLMOmniGenerateVideo):
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "url": ("STRING", {"default": "http://localhost:8000/v1"}),
+                "model": ("STRING", {"default": "MiniMaxAI/MiniMax-H3"}),
+                "prompt": ("STRING", {"multiline": True}),
+                "negative_prompt": ("STRING", {"multiline": True, "default": ""}),
+                "width": ("INT", {"default": 1344, "min": 32, "step": 32}),
+                "height": ("INT", {"default": 768, "min": 32, "step": 32}),
+                "fps": ("INT", {"default": 24, "min": 1}),
+                "duration": (
+                    "FLOAT",
+                    {
+                        "default": 124 / 24,
+                        "min": 0.1,
+                        "step": 0.1,
+                        "round": 0.001,
+                        "tooltip": "Clip length in seconds; MiniMax-H3 rounds to its 17k+5 frame lattice.",
+                    },
+                ),
+            },
+            "optional": {
+                "first_frame": ("IMAGE",),
+                "last_frame": ("IMAGE",),
+                "sampling_params": ("SAMPLING_PARAMS",),
+                "lora": ("REMOTE_LORA",),
+                "model_params": ("VIDEO_PARAMS",),
+            },
+        }
+
+    @classmethod
+    def VALIDATE_INPUTS(
+        cls,
+        url,
+        model,
+        first_frame=None,
+        last_frame=None,
+        **_kwargs,
+    ) -> str | Literal[True]:
+        base = _VLLMOmniGenerateBase.VALIDATE_INPUTS(url, model)
+        if base is not True:
+            return base
+        if first_frame is None and last_frame is None:
+            return "Connect at least one of first_frame or last_frame."
+        return True
 
 
 class VLLMOmniUnderstanding(_VLLMOmniGenerateBase):
