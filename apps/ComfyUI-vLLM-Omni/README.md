@@ -50,7 +50,6 @@ This extension offers the following nodes based on the output modalities (at **C
 - **Generate Image** for text-to-image and image-to-image tasks
 - **Generate Video** for text-to-video, first-frame/image-to-video, and reference-conditioned video
 - **FastH3 Deployment** for routing text-to-video requests to a MiniMax-H3 server with FastH3 fused at startup
-- **MiniMax-H3 Image to Video** for H3 first-frame, last-frame, or first-and-last-frame generation
 - **Multimodality Understanding** for multimodality-to-text and multimodality-to-audio tasks
 - **TTS** and **TTS Voice Clone** for TTS tasks
 
@@ -63,7 +62,7 @@ Every node carries the vLLM-Omni mark in its title bar and is tinted by what it 
 
 | Colour | Nodes | What they produce |
 | --- | --- | --- |
-| Blue | Generate Image, Generate Video, MiniMax-H3 Image to Video, Multimodality Understanding, TTS, TTS Voice Clone | A generated image, video, audio, or text. These are the only nodes that reach a server. |
+| Blue | Generate Image, Generate Video, Multimodality Understanding, TTS, TTS Voice Clone | A generated image, video, audio, or text. These are the only nodes that reach a server. |
 | Amber | AR / Diffusion / Multi-Stage Sampling Params | Sampling parameters that apply to any model |
 | Purple | Qwen TTS Params, Wan Video Params, MiniMax-H3 Video Params | Parameters that only one model family accepts |
 | Red | LoRA, FastH3 Deployment | Which weights the server is expected to have loaded |
@@ -71,7 +70,7 @@ Every node carries the vLLM-Omni mark in its title bar and is tinted by what it 
 
 Recolouring a node by hand (right click -> Colors) overrides its tint, and the choice is kept.
 
-**Generate Video** and **MiniMax-H3 Image to Video** take a clip length in seconds (`duration`), not a frame count. Frames stay the wire unit and are derived with the node's `fps`, so the length is always measured against the rate that is actually served; models that accept only certain frame counts still round to their own lattice server-side. Graphs saved before this widget existed stored `num_frames` in its place and are converted on load, using the fps recorded alongside it -- the browser console names every node it rewrites.
+**Generate Video** takes a clip length in seconds (`duration`), not a frame count. Frames stay the wire unit and are derived with the node's `fps`, so the length is always measured against the rate that is actually served; models that accept only certain frame counts still round to their own lattice server-side. Graphs saved before this widget existed stored `num_frames` in its place and are converted on load, using the fps recorded alongside it -- the browser console names every node it rewrites.
 
 To build a simple workflow yourself,
 
@@ -134,13 +133,13 @@ You can configure per-stage sampling parameters for multi-stage models.
 </p>
 
 > [!TIP]
-> Connect **frame** on **Generate Video** for its existing first-frame / image-to-video behavior.
-> For MiniMax-H3 FL2VA, use **MiniMax-H3 Image to Video** and connect **first_frame**,
-> **last_frame**, or both to condition the start frame, end frame, or both.
+> Connect **frame** for backward-compatible first-frame / image-to-video behavior. For MiniMax-H3 FL2VA,
+> connect **first_frame**, **last_frame**, or both to condition the start frame, end frame, or both.
 >
 > For reference-conditioned generation (MiniMax-H3 Ref2VA), connect a **Video References** node instead.
 >
-> The dedicated H3 node requires at least one frame. Use **Generate Video** without a frame for H3 T2VA.
+> Do not combine `frame` with `first_frame` or `last_frame`, and do not combine any frame input with
+> `references`. Task routing is automatic from which inputs you connect.
 
 For MiniMax-H3 Ref2VA, **Video References** accepts up to 9 images (`image_1`–`image_9`),
 3 videos (`video_1`–`video_3`), and 3 audio clips (`audio_1`–`audio_3`), with at most
