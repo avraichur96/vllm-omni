@@ -299,6 +299,12 @@ class VLLMOmniClient:
         if references is not None and (first_frame is not None or last_frame is not None):
             raise ValueError("Provide either first_frame/last_frame or references, not both.")
 
+        spec, matched_pattern = lookup_model_spec(spec_model or model)
+        if (first_frame is not None or last_frame is not None) and (
+            matched_pattern is None or "MiniMax-H3" not in matched_pattern
+        ):
+            raise ValueError("first_frame and last_frame are supported only for MiniMax-H3; use frame for this model.")
+
         # === regular payload fields ===
         form = aiohttp.FormData()
         form.add_field("model", model)
@@ -318,8 +324,6 @@ class VLLMOmniClient:
         # === multimodal inputs (first-last-frames, references, etc.) ===
         input_reference_image: torch.Tensor | None = None
         keyframe_images: list[tuple[str, torch.Tensor]] = []
-        audio_reference: AudioInput | None = None
-        reference_videos: list[VideoInput] = []
         video_task: str | None = None
 
         if frame is not None:
@@ -391,27 +395,11 @@ class VLLMOmniClient:
                     content_type="image/png",
                 )
 
-        if audio_reference is not None:
-            form.add_field(
-                "audio_reference",
-                json.dumps({"audio_url": audio_to_base64(audio_reference)}, ensure_ascii=False),
-            )
-
-        for idx, video in enumerate(reference_videos, start=1):
-            video_filename = f"reference_{idx}.mp4"
-            form.add_field(
-                "input_references",
-                video_to_bytes(video, video_filename),
-                filename=video_filename,
-                content_type="video/mp4",
-            )
-
         # === model specific params. Either use a specialized builder, or add flattened fields as-is ===
         if model_params is not None:
             model_params = dict(model_params)
             model_params.pop("type", None)
 
-        spec, _ = lookup_model_spec(spec_model or model)
         params_builder = spec.get("params_builder") if spec else None
         if params_builder is not None:
             form_fields = params_builder(

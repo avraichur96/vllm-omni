@@ -226,6 +226,7 @@ class VLLMOmniGenerateVideo(_VLLMOmniGenerateBase):
         first_frame=None,
         last_frame=None,
         references=None,
+        fast_h3=None,
         **_kwargs,
     ) -> str | Literal[True]:
         base = super().VALIDATE_INPUTS(url, model)
@@ -237,6 +238,10 @@ class VLLMOmniGenerateVideo(_VLLMOmniGenerateBase):
             return "Provide either frame or first_frame/last_frame, not both."
         if references is not None and (first_frame is not None or last_frame is not None):
             return "Provide either first_frame/last_frame or references, not both."
+        if fast_h3 is not None and any(value is not None for value in (frame, first_frame, last_frame, references)):
+            return (
+                "FastH3 Preview supports T2VA only; disconnect frame, first_frame, last_frame, and references inputs."
+            )
         return True
 
     async def generate(
@@ -269,8 +274,11 @@ class VLLMOmniGenerateVideo(_VLLMOmniGenerateBase):
         spec_model = model
 
         if fast_h3 is not None:
-            if frame is not None or references is not None:
-                raise ValueError("FastH3 Preview supports T2VA only; disconnect frame and references inputs.")
+            if any(value is not None for value in (frame, first_frame, last_frame, references)):
+                raise ValueError(
+                    "FastH3 Preview supports T2VA only; disconnect frame, first_frame, "
+                    "last_frame, and references inputs."
+                )
             if lora is not None:
                 raise ValueError(
                     "FastH3 is already fused into the selected server; disconnect the request-level LoRA input."

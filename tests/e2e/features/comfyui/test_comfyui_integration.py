@@ -1046,8 +1046,61 @@ async def test_video_generation_node_rejects_conflicting_frame_inputs(kwargs: di
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("keyframe_name", ["first_frame", "last_frame"])
+async def test_video_generation_node_rejects_keyframes_with_fast_h3(keyframe_name: str):
+    node = VLLMOmniGenerateVideo()
+    fast_h3 = {"url": "http://localhost:8000/v1", "model": "MiniMaxAI/MiniMax-H3"}
+    keyframe = {keyframe_name: object()}
+
+    validation_result = node.VALIDATE_INPUTS(
+        url="http://ignored.invalid/v1",
+        model="ignored-model",
+        fast_h3=fast_h3,
+        **keyframe,
+    )
+
+    assert isinstance(validation_result, str)
+    assert "FastH3 Preview supports T2VA only" in validation_result
+
+    with pytest.raises(ValueError, match="FastH3 Preview supports T2VA only"):
+        await node.generate(
+            url="http://ignored.invalid/v1",
+            model="ignored-model",
+            prompt="test",
+            width=VIDEO_WIDTH,
+            height=VIDEO_HEIGHT,
+            fps=VIDEO_FPS,
+            duration=VIDEO_DURATION,
+            fast_h3=fast_h3,
+            **keyframe,
+        )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "server_case,sampling_case,ref_mode",
+    "keyframes",
+    [
+        {"first_frame": object()},
+        {"last_frame": object()},
+        {"first_frame": object(), "last_frame": object()},
+    ],
+)
+async def test_video_generation_node_rejects_h3_keyframes_for_other_models(keyframes: dict):
+    with pytest.raises(ValueError, match="supported only for MiniMax-H3; use frame"):
+        await VLLMOmniGenerateVideo().generate(
+            url="http://localhost:8000/v1",
+            model="Wan-AI/Wan2.2-I2V-A14B-Diffusers",
+            prompt="test",
+            width=VIDEO_WIDTH,
+            height=VIDEO_HEIGHT,
+            fps=VIDEO_FPS,
+            duration=VIDEO_DURATION,
+            **keyframes,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "server_case,deployment_model",
     [
         pytest.param(
