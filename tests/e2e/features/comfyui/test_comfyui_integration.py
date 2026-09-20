@@ -974,7 +974,7 @@ async def test_video_generation_node(api_server: str, model: str, image_input: b
             ServerCase(
                 served_model="MiniMaxAI/MiniMax-H3",
                 stage_list=["diffusion"],
-                stage_configs=[{"stage_type": "diffusion", "final_output": True, "final_output_type": "video"}],
+                stage_configs=[H3_STAGE_CONFIG],
                 outputs=[_build_diffusion_video_output()],
             ),
             id="minimax-h3",
@@ -987,32 +987,44 @@ async def test_video_generation_node(api_server: str, model: str, image_input: b
     [pytest.param(SamplingCase(kind=SamplingKind.VIDEO_FL2VA, sampling_params=None), id="fl2va")],
     indirect=True,
 )
-async def test_video_generation_node_minimax_h3_fl2va(api_server: str, sampling_case: SamplingCase):
+@pytest.mark.parametrize(
+    "frame_selection",
+    [
+        pytest.param("first", id="first-frame"),
+        pytest.param("last", id="last-frame"),
+        pytest.param("both", id="first-and-last-frame"),
+    ],
+)
+async def test_video_generation_node_minimax_h3_fl2va(
+    api_server: str,
+    sampling_case: SamplingCase,
+    frame_selection: str,
+):
     node = VLLMOmniGenerateVideo()
     first_frame = torch.zeros((1, VIDEO_HEIGHT, VIDEO_WIDTH, 3), dtype=torch.float32)
     last_frame = torch.ones((1, VIDEO_HEIGHT, VIDEO_WIDTH, 3), dtype=torch.float32)
+    frame_inputs = {
+        "first": {"first_frame": first_frame},
+        "last": {"last_frame": last_frame},
+        "both": {"first_frame": first_frame, "last_frame": last_frame},
+    }[frame_selection]
 
-    for frame_inputs in (
-        {"first_frame": first_frame},
-        {"last_frame": last_frame},
-        {"first_frame": first_frame, "last_frame": last_frame},
-    ):
-        result = await node.generate(
-            url=api_server,
-            model="MiniMaxAI/MiniMax-H3",
-            prompt="A cinematic transition between the supplied keyframes.",
-            negative_prompt="",
-            width=VIDEO_WIDTH,
-            height=VIDEO_HEIGHT,
-            fps=VIDEO_FPS,
-            duration=VIDEO_DURATION,
-            model_params=H3_MODEL_PARAMS,
-            **frame_inputs,
-        )
+    result = await node.generate(
+        url=api_server,
+        model="MiniMaxAI/MiniMax-H3",
+        prompt="A cinematic transition between the supplied keyframes.",
+        negative_prompt="",
+        width=VIDEO_WIDTH,
+        height=VIDEO_HEIGHT,
+        fps=VIDEO_FPS,
+        duration=VIDEO_DURATION,
+        model_params=H3_MODEL_PARAMS,
+        **frame_inputs,
+    )
 
-        assert isinstance(result, tuple)
-        assert len(result) == 1
-        assert isinstance(result[0], VideoInput)
+    assert isinstance(result, tuple)
+    assert len(result) == 1
+    assert isinstance(result[0], VideoInput)
 
 
 def test_video_generation_node_exposes_explicit_keyframe_inputs():
