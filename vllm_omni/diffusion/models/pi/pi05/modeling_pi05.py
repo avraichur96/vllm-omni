@@ -3,7 +3,7 @@
 """Inference-only π0.5 VLA math kernel for vllm-omni.
 
 Only the math that turns a robot observation into an action chunk; no serving or
-request glue. Deliberately shaped like ``models/pi0/modeling_pi0.py`` so the two
+request glue. Deliberately shaped like ``models/pi/pi0/modeling_pi0.py`` so the two
 can later be factored into a shared Pi-family module (RFC step 2) on a
 "behaviour unchanged" review.
 
