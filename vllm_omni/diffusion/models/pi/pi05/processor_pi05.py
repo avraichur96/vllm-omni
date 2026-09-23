@@ -35,8 +35,8 @@ import torch.nn.functional as F
 from PIL import Image
 from vllm.logger import init_logger
 
-from vllm_omni.diffusion.models.pi05.config import resolve_excluded_action_indices
-from vllm_omni.diffusion.models.pi05.modeling_pi05 import (
+from vllm_omni.diffusion.models.pi.pi05.config import resolve_excluded_action_indices
+from vllm_omni.diffusion.models.pi.pi05.modeling_pi05 import (
     DEFAULT_IMAGE_RESOLUTION,
     DEFAULT_MAX_TOKEN_LEN,
     DEFAULT_STATE_NUM_BINS,

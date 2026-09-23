@@ -32,9 +32,9 @@ from torch import nn
 from vllm.logger import init_logger
 
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
-from vllm_omni.diffusion.models.pi05.config import SUPPORTED_DTYPE_NAMES, Pi05Config
-from vllm_omni.diffusion.models.pi05.modeling_pi05 import Pi05ForActionPrediction
-from vllm_omni.diffusion.models.pi05.processor_pi05 import Pi05Processor
+from vllm_omni.diffusion.models.pi.pi05.config import SUPPORTED_DTYPE_NAMES, Pi05Config
+from vllm_omni.diffusion.models.pi.pi05.modeling_pi05 import Pi05ForActionPrediction
+from vllm_omni.diffusion.models.pi.pi05.processor_pi05 import Pi05Processor
 from vllm_omni.diffusion.models.pi05_pipeline_config import PI05_PIPELINE as PI05_PIPELINE
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 

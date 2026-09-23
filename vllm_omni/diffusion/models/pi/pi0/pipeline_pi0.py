@@ -23,9 +23,9 @@ from torch import nn
 from vllm.logger import init_logger
 
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
-from vllm_omni.diffusion.models.pi0.config import Pi0Config
-from vllm_omni.diffusion.models.pi0.modeling_pi0 import Pi0ForActionPrediction
-from vllm_omni.diffusion.models.pi0.processor_pi0 import build_model_inputs
+from vllm_omni.diffusion.models.pi.pi0.config import Pi0Config
+from vllm_omni.diffusion.models.pi.pi0.modeling_pi0 import Pi0ForActionPrediction
+from vllm_omni.diffusion.models.pi.pi0.processor_pi0 import build_model_inputs
 from vllm_omni.diffusion.models.pi0_pipeline_config import PI0_PIPELINE as PI0_PIPELINE
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 
