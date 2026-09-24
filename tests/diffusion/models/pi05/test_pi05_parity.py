@@ -142,8 +142,9 @@ def _instantiate_vllm_omni(
     dtype: str = DTYPE_STR,
 ):
     """Build the vllm-omni π0.5 model in isolation (no pipeline, no engine)."""
-    from vllm_omni.diffusion.models.pi05 import Pi05Config, Pi05ForActionPrediction
     from vllm_omni.diffusion.models.pi05.pipeline_pi05 import _set_inference_dtype
+
+    from vllm_omni.diffusion.models.pi05 import Pi05Config, Pi05ForActionPrediction
 
     cfg = Pi05Config(
         max_action_dim=ACTION_DIM,
@@ -276,7 +277,6 @@ def test_pi05_prompt_parity():
     small, plausible-looking action difference.
     """
     from transformers import AutoTokenizer
-
     from vllm_omni.diffusion.models.pi05.processor_pi05 import (
         apply_norm,
         build_norm_stats,
@@ -317,7 +317,6 @@ def test_pi05_prompt_parity_across_state_widths(state_dim):
     from lerobot.lerobot_types import TransitionKey
     from lerobot.policies.pi05.processor_pi05 import Pi05PrepareStateTokenizerProcessorStep
     from lerobot.utils.constants import OBS_STATE
-
     from vllm_omni.diffusion.models.pi05.processor_pi05 import build_pi05_prompt
 
     g = torch.Generator().manual_seed(state_dim)
@@ -374,7 +373,6 @@ def test_pi05_state_normalization_parity(lerobot_mode, stats, ours, state, state
     from lerobot.configs.types import FeatureType, NormalizationMode, PolicyFeature
     from lerobot.processor.normalize_processor import NormalizerProcessorStep
     from lerobot.utils.constants import OBS_STATE
-
     from vllm_omni.diffusion.models.pi05.processor_pi05 import apply_norm, build_norm_stats
 
     step = NormalizerProcessorStep(
@@ -400,7 +398,6 @@ def test_pi05_relative_actions_parity():
         OBS_LANGUAGE_ATTENTION_MASK,
         OBS_LANGUAGE_TOKENS,
     )
-
     from vllm_omni.diffusion.models.pi05.processor_pi05 import (
         Pi05RelativeActions,
         apply_norm,

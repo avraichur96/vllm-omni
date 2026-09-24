@@ -17,7 +17,6 @@ import math
 
 import pytest
 import torch
-
 from vllm_omni.diffusion.models.pi0.config import Pi0Config
 from vllm_omni.diffusion.models.pi0.modeling_pi0 import (
     OPENPI_ATTENTION_MASK_VALUE,
@@ -34,6 +33,7 @@ from vllm_omni.diffusion.models.pi0.processor_pi0 import (
     build_model_inputs,
     pil_image_to_tensor,
     resize_with_pad,
+    tokenize_prompt,
 )
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
@@ -430,6 +430,27 @@ class _FakeTokenizer:
             ids.append(0)
             attn.append(0)
         return {"input_ids": ids, "attention_mask": attn}
+
+
+def test_tokenize_prompt_keeps_pi0_newline_policy():
+    class RecordingTokenizer(_FakeTokenizer):
+        def __call__(self, text, **kwargs):
+            self.text = text
+            self.kwargs = kwargs
+            return super().__call__(text, **kwargs)
+
+    tokenizer = RecordingTokenizer()
+    ids, attn = tokenize_prompt(tokenizer, "pick up the block", 12)
+
+    assert tokenizer.text == "pick up the block\n"
+    assert tokenizer.kwargs == {
+        "padding": "max_length",
+        "max_length": 12,
+        "truncation": True,
+        "add_special_tokens": True,
+        "return_tensors": None,
+    }
+    assert len(ids) == len(attn) == 12
 
 
 def test_build_model_inputs_camera_order_and_padding():
