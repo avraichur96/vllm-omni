@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
+
 """
 Tests for alignment between _DIFFUSION_MODELS and DIFFUSION_TEST_SETTINGS; if
 tests in this file are failing, you are probably adding a new model, and need
@@ -25,7 +28,11 @@ EXCLUDED_MODELS = [
     "GlmImagePipeline",
     "ZImagePipeline",
     "OvisImagePipeline",
+    # Requires upstream AR hidden states and token boundaries; covered by
+    # dedicated MammothModa2 bridge/pipeline tests and real-checkpoint E2E.
+    "MammothModa2DiTPipeline",
     "WanPipeline",
+    "WanDMDPipeline",
     "WanVACEPipeline",
     "LTX2TwoStagePipeline",
     "LTX2DistilledOneStagePipeline",
@@ -43,11 +50,12 @@ EXCLUDED_MODELS = [
     "LongCatVideoAvatarPipeline",
     "BagelPipeline",
     "BooguImagePipeline",
+    "BooguImageTurboPipeline",
     "LancePipeline",
     "MingImagePipeline",
+    "MingImageDiffusionPipeline",
+    "MingImageLayeredDiffusionPipeline",
     "InternVLAA1Pipeline",
-    "LongCatImageEditPipeline",
-    "StableDiffusion3Pipeline",
     "HunyuanImage3ForCausalMM",
     "ErnieImagePipeline",
     "NextStep11Pipeline",
@@ -57,7 +65,6 @@ EXCLUDED_MODELS = [
     "OmniGen2Pipeline",
     "HeliosPipeline",
     "HeliosPyramidPipeline",
-    "DreamIDOmniPipeline",
     "SenseNovaU1Pipeline",
     "HunyuanVideo15Pipeline",
     "HunyuanVideo15ImageToVideoPipeline",
@@ -65,7 +72,9 @@ EXCLUDED_MODELS = [
     # Requires camera/action assets and persistent AR state; covered by its
     # dedicated contract tests and real-checkpoint E2E smoke instead.
     "LingBotWorldCausalDMDPipeline",
-    "MagiHumanPipeline",
+    # The 270+ GiB multimodal checkpoint needs 4/8-way native sequence/head
+    # parallel execution; covered by focused native contract and GPU tests.
+    "Magi2Pipeline",
     "OmniVoicePipeline",
     "OmniVoice",
     "Cosmos3OmniDiffusersPipeline",
@@ -77,7 +86,12 @@ EXCLUDED_MODELS = [
     "StableDiffusionXLPipeline",
     "Gr00tN1d7Pipeline",
     "Pi0Pipeline",
+    "Pi05Pipeline",
     "SanaWmPipeline",
+    # Audio pipeline conditioned by a separate Qwen2.5-Omni encoder stage;
+    # covered by tests/diffusion/models/auk (CPU pipeline tests, parity) and
+    # the real-checkpoint E2E test instead of a tiny model.
+    "AuKPipeline",
 ]
 
 

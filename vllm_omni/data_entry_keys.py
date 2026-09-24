@@ -19,6 +19,9 @@ import msgspec
 import numpy as np
 import torch
 
+REQUEST_ARTIFACT_DIRS_KEY = "_omni_request_artifact_dirs"
+TRANSFORM_OWNED_META_KEYS = frozenset({"minimax_h3_prepared_reference_videos"})
+
 if TYPE_CHECKING:
     from vllm_omni.engine import AdditionalInformationEntry, AdditionalInformationPayload
 
@@ -31,9 +34,14 @@ class HiddenStates(TypedDict, total=False):
 
 
 class Embeddings(TypedDict, total=False):
+    prepared_prefill: torch.Tensor
     prefill: torch.Tensor
     decode: torch.Tensor
+    decode_token_start: int
+    decode_token_end: int
     cached_decode: torch.Tensor
+    cached_decode_token_start: int
+    cached_decode_token_end: int
     tts_bos: torch.Tensor
     tts_eos: torch.Tensor
     tts_pad: torch.Tensor
@@ -51,11 +59,13 @@ class Codes(TypedDict, total=False):
 
 
 class Ids(TypedDict, total=False):
+    prepared_prefill: torch.Tensor
     all: list[int]
     prompt: list[int]
     output: list[int]
     speech_token: list[int]
     prior_image: list[int]
+    streaming_prompt_previous_codes: list[int]
 
 
 class OmniPayloadMeta(TypedDict, total=False):
@@ -75,7 +85,11 @@ class OmniPayloadMeta(TypedDict, total=False):
     override_keys: list[tuple[str, str]]
     num_processed_tokens: int
     next_stage_prompt_len: int
+    next_stage_generation_tokens: int
     replace_streaming_prompt: bool
+    next_stage_prompt_ids: list[int]
+    streaming_prompt_recompute: bool
+    streaming_condition_seq: int
     replace_runtime_additional_information: bool
     ar_width: int
     eol_token_id: int
@@ -87,6 +101,7 @@ class OmniPayloadMeta(TypedDict, total=False):
     width: int
     decode_flag: bool
     codec_streaming: bool
+    codec_frame_valid: bool | torch.Tensor
     ref_code_len: int
     ref_context_size: int
     ref_context_request_id: str
@@ -98,6 +113,8 @@ class OmniPayloadMeta(TypedDict, total=False):
     # reproducible, and the producing stage's SamplingParams do not travel
     # with the payload.
     audio_seed: int
+    token_role_ids: torch.Tensor
+    minimax_h3_prepared_reference_videos: str
 
 
 class OmniPayload(TypedDict, total=False):
@@ -139,6 +156,8 @@ class EmbeddingsStruct(_StructBase):
     decode_token_start: int | None = None
     decode_token_end: int | None = None
     cached_decode: torch.Tensor | None = None
+    cached_decode_token_start: int | None = None
+    cached_decode_token_end: int | None = None
     tts_bos: torch.Tensor | None = None
     tts_eos: torch.Tensor | None = None
     tts_pad: torch.Tensor | None = None
@@ -162,6 +181,7 @@ class IdsStruct(_StructBase):
     output: list[int] | None = None
     speech_token: list[int] | None = None
     prior_image: list[int] | None = None
+    streaming_prompt_previous_codes: list[int] | None = None
 
 
 class MetaStruct(_StructBase):
@@ -178,7 +198,11 @@ class MetaStruct(_StructBase):
     override_keys: list[tuple[str, str]] | None = None
     num_processed_tokens: int | None = None
     next_stage_prompt_len: int | None = None
+    next_stage_generation_tokens: int | None = None
     replace_streaming_prompt: bool | None = None
+    next_stage_prompt_ids: list[int] | None = None
+    streaming_prompt_recompute: bool | None = None
+    streaming_condition_seq: int | None = None
     replace_runtime_additional_information: bool | None = None
     ar_width: int | None = None
     eol_token_id: int | None = None
@@ -190,7 +214,14 @@ class MetaStruct(_StructBase):
     width: int | None = None
     decode_flag: bool | None = None
     codec_streaming: bool | None = None
+    codec_frame_valid: torch.Tensor | None = None
     ref_code_len: int | None = None
+    # Expected FINAL length of a growing async-chunk sequence, when the
+    # producer knows it up front (e.g. a frame-locked AR stage whose
+    # max_tokens is exact). Lets consumers size fixed-capacity state (such as
+    # a CUDA-graph StaticCache bucket) optimally instead of assuming the
+    # worst case.
+    expected_total_tokens: int | None = None
     ref_context_size: int | None = None
     ref_context_request_id: str | None = None
     ref_context_included: bool | None = None
@@ -200,6 +231,8 @@ class MetaStruct(_StructBase):
     code_flat_numel: int | None = None
     omni_final_stage_id: int | None = None
     audio_seed: int | None = None
+    token_role_ids: torch.Tensor | None = None
+    minimax_h3_prepared_reference_videos: str | None = None
 
 
 class OmniPayloadStruct(_StructBase):
