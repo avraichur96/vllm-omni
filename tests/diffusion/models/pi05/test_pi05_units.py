@@ -29,8 +29,6 @@ from typing import Any
 import numpy as np
 import pytest
 import torch
-
-from vllm_omni.diffusion.models.pi05 import modeling_pi05
 from vllm_omni.diffusion.models.pi05.config import (
     Pi05Config,
     UnsupportedCheckpointCapabilityError,
@@ -56,7 +54,10 @@ from vllm_omni.diffusion.models.pi05.processor_pi05 import (
     build_pi05_prompt,
     discretize_state,
     resize_with_pad,
+    tokenize_prompt,
 )
+
+from vllm_omni.diffusion.models.pi05 import modeling_pi05
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
@@ -654,6 +655,28 @@ class _FakeTokenizer:
         return {"input_ids": [0] * length, "attention_mask": [1] * length}
 
 
+def test_tokenize_prompt_preserves_pi05_prompt_verbatim():
+    class RecordingTokenizer(_FakeTokenizer):
+        def __call__(self, text, **kwargs):
+            self.text = text
+            self.kwargs = kwargs
+            return super().__call__(text, **kwargs)
+
+    prompt = "Task: move block, State: 1 2 3;\nAction: "
+    tokenizer = RecordingTokenizer()
+    ids, attn = tokenize_prompt(tokenizer, prompt, 16)
+
+    assert tokenizer.text == prompt
+    assert tokenizer.kwargs == {
+        "padding": "max_length",
+        "max_length": 16,
+        "truncation": True,
+        "add_special_tokens": True,
+        "return_tensors": None,
+    }
+    assert len(ids) == len(attn) == 16
+
+
 @pytest.mark.parametrize("explicit_none", [False, True])
 def test_build_model_inputs_preserves_missing_middle_camera_slot(explicit_none):
     config = Pi05Config(image_feature_keys=_EXPECTED_CAMERA_ORDER, max_cameras=3)
@@ -866,8 +889,9 @@ def test_sample_actions_uses_request_generator(tiny_model):
     ],
 )
 def test_resolve_dtype_accepts_supported_serving_dtypes(declared, expected):
-    from vllm_omni.diffusion.data import OmniDiffusionConfig
     from vllm_omni.diffusion.models.pi05.pipeline_pi05 import Pi05Pipeline
+
+    from vllm_omni.diffusion.data import OmniDiffusionConfig
 
     assert Pi05Pipeline._resolve_dtype(OmniDiffusionConfig(dtype=declared)) is expected
 
@@ -881,8 +905,9 @@ def test_resolve_dtype_rejects_unvalidated_dtypes(declared):
     asserting on: it maps a string it does not recognize onto bfloat16 with a
     warning, so e.g. ``"float64"`` never reaches this guard as float64.
     """
-    from vllm_omni.diffusion.data import OmniDiffusionConfig
     from vllm_omni.diffusion.models.pi05.pipeline_pi05 import Pi05Pipeline
+
+    from vllm_omni.diffusion.data import OmniDiffusionConfig
 
     with pytest.raises(ValueError, match="Unsupported π0.5 dtype"):
         Pi05Pipeline._resolve_dtype(OmniDiffusionConfig(dtype=declared))
