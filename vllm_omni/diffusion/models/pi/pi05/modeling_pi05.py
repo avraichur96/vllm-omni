@@ -42,6 +42,8 @@ from transformers.models.paligemma.modeling_paligemma import (
 )
 from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 
+from vllm_omni.diffusion.models.pi.common import attention, backbone, flow_matching
+
 logger = logging.getLogger(__name__)
 
 # ──────────────────────────────────────────────────────────────────────
@@ -57,7 +59,10 @@ DEFAULT_STATE_NUM_BINS = 256  # openpi PaliGemmaTokenizer.tokenize()
 # Large negative value to fill masked-out positions in a float attention mask.
 # Matches OpenPI's constant exactly so that numerics line up during parity.
 # Ref: openpi/src/openpi/models/gemma.py
-OPENPI_ATTENTION_MASK_VALUE = -2.3819763e38
+OPENPI_ATTENTION_MASK_VALUE = attention.OPENPI_ATTENTION_MASK_VALUE
+make_att_2d_masks = attention.make_att_2d_masks
+prepare_attention_masks_4d = attention.prepare_attention_masks_4d
+create_sinusoidal_pos_embedding = flow_matching.create_sinusoidal_pos_embedding
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -85,59 +90,6 @@ def get_gemma_config(variant: str) -> GemmaVariantConfig:
 # ──────────────────────────────────────────────────────────────────────
 # Utility functions (match openpi/models_pytorch/pi0_pytorch.py)
 # ──────────────────────────────────────────────────────────────────────
-def create_sinusoidal_pos_embedding(
-    time: torch.Tensor,
-    dimension: int,
-    min_period: float = 4e-3,
-    max_period: float = 4.0,
-    device: torch.device = None,
-) -> torch.Tensor:
-    """Compute a sine/cosine positional embedding for scalar timesteps.
-
-    Ref: openpi/models_pytorch/pi0_pytorch.py create_sinusoidal_pos_embedding
-    """
-    if dimension % 2 != 0:
-        raise ValueError(f"dimension ({dimension}) must be divisible by 2")
-    if time.ndim != 1:
-        raise ValueError("time tensor must be 1-D (batch_size,)")
-    if device is None:
-        device = time.device
-
-    # Use float64 for the log-linear sweep and for the inner products, to
-    # match the reference implementation's numerical behaviour exactly.
-    dtype = torch.float64
-    fraction = torch.linspace(0.0, 1.0, dimension // 2, dtype=dtype, device=device)
-    period = min_period * (max_period / min_period) ** fraction
-    scaling_factor = 1.0 / period * 2 * math.pi
-    sin_input = scaling_factor[None, :] * time[:, None].to(dtype)
-    return torch.cat([torch.sin(sin_input), torch.cos(sin_input)], dim=1)
-
-
-def make_att_2d_masks(pad_masks: torch.Tensor, att_masks: torch.Tensor) -> torch.Tensor:
-    """Build a 2D attention mask from a padding mask and an autoregressive mask.
-
-    Ref: openpi/models_pytorch/pi0_pytorch.py make_att_2d_masks
-    """
-    if att_masks.ndim != 2:
-        raise ValueError(f"att_masks must be 2-D, got {att_masks.ndim}-D")
-    if pad_masks.ndim != 2:
-        raise ValueError(f"pad_masks must be 2-D, got {pad_masks.ndim}-D")
-
-    cumsum = torch.cumsum(att_masks, dim=1)
-    att_2d_masks = cumsum[:, None, :] <= cumsum[:, :, None]
-    pad_2d_masks = pad_masks[:, None, :] * pad_masks[:, :, None]
-    return att_2d_masks & pad_2d_masks
-
-
-def prepare_attention_masks_4d(att_2d_masks: torch.Tensor) -> torch.Tensor:
-    """Convert ``(B, S, S)`` bool masks to ``(B, 1, S, S)`` float masks.
-
-    ``True`` → 0.0 (attend), ``False`` → ``OPENPI_ATTENTION_MASK_VALUE``.
-    """
-    att_2d_masks_4d = att_2d_masks[:, None, :, :]
-    return torch.where(att_2d_masks_4d, 0.0, OPENPI_ATTENTION_MASK_VALUE)
-
-
 class Pi05AdaRMSNorm(nn.Module):
     """Adaptive RMSNorm conditioned on the flow-matching timestep.
 
@@ -218,74 +170,9 @@ def _gated_residual(residual: torch.Tensor, out: torch.Tensor, gate: torch.Tenso
 # ──────────────────────────────────────────────────────────────────────
 # Dual-backbone: PaliGemma + AdaRMS action expert
 # ──────────────────────────────────────────────────────────────────────
-def _repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
-    """Repeat KV heads for grouped-query attention.
-
-    ``(B, num_kv_heads, S, D) → (B, num_kv_heads * n_rep, S, D)``.
-    """
-    if n_rep == 1:
-        return hidden_states
-    b, nh, s, d = hidden_states.shape
-    hidden_states = hidden_states[:, :, None, :, :].expand(b, nh, n_rep, s, d)
-    return hidden_states.reshape(b, nh * n_rep, s, d)
-
-
-def _attend(query_states, key_states, value_states, attention_mask, num_kv_groups, scaling):
-    """Manual eager attention: ``softmax(Q Kᵀ · scale + mask) · V``.
-
-    The mask is sliced to ``key_states.shape[-2]`` so the same
-    ``(B, 1, Q, prefix+suffix)`` mask works in both the prefix pass (K length =
-    prefix) and the suffix pass (K length = prefix + suffix).
-    """
-    k = _repeat_kv(key_states, num_kv_groups)
-    v = _repeat_kv(value_states, num_kv_groups)
-    attn_weights = torch.matmul(query_states, k.transpose(2, 3)) * scaling
-    if attention_mask is not None:
-        attn_weights = attn_weights + attention_mask[:, :, :, : k.shape[-2]]
-    attn_weights = F.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
-    return torch.matmul(attn_weights, v)
-
-
 def _match(tensor: torch.Tensor, module: nn.Module) -> torch.Tensor:
     """Cast ``tensor`` to the dtype ``module``'s weight expects."""
     return tensor.to(module.weight.dtype) if tensor.dtype != module.weight.dtype else tensor
-
-
-def _compute_layer_prefix_only(layer_idx, hidden_states, attention_mask, position_ids, paligemma):
-    """Run one PaliGemma LM layer on the prefix, returning the layer output and
-    the post-RoPE ``(k, v)`` for the suffix pass.
-
-    Identical to π0: the prefix backbone is unchanged in π0.5 (no AdaRMS —
-    there is no timestep in the prefix).
-    """
-    model = paligemma.model.language_model
-    layer = model.layers[layer_idx]
-    residual = hidden_states
-    x = _match(layer.input_layernorm(hidden_states), layer.self_attn.q_proj)
-
-    hidden_shape = (*x.shape[:-1], -1, layer.self_attn.head_dim)
-    q = layer.self_attn.q_proj(x).view(hidden_shape).transpose(1, 2)
-    k = layer.self_attn.k_proj(x).view(hidden_shape).transpose(1, 2)
-    v = layer.self_attn.v_proj(x).view(hidden_shape).transpose(1, 2)
-
-    cos, sin = model.rotary_emb(v, position_ids)
-    q, k = apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1)
-
-    att = _attend(
-        q,
-        k,
-        v,
-        attention_mask,
-        num_kv_groups=layer.self_attn.num_key_value_groups,
-        scaling=1.0 / math.sqrt(layer.self_attn.head_dim),
-    )
-    att = att.transpose(1, 2).reshape(q.shape[0], -1, q.shape[1] * layer.self_attn.head_dim)
-
-    out = layer.self_attn.o_proj(_match(att, layer.self_attn.o_proj)) + residual
-    after_resid = out
-    normed = layer.post_attention_layernorm(out)
-    out = layer.mlp(_match(normed, layer.mlp.up_proj)) + after_resid
-    return out, (k, v)
 
 
 def _compute_layer_suffix_only(
@@ -323,7 +210,7 @@ def _compute_layer_suffix_only(
     k = torch.cat([k_prefix.to(k_suf.dtype), k_suf], dim=2)
     v = torch.cat([v_prefix.to(v_suf.dtype), v_suf], dim=2)
 
-    att = _attend(
+    att = attention.eager_attention(
         q,
         k,
         v,
@@ -453,12 +340,13 @@ class PaliGemmaWithActionExpertPi05(nn.Module):
             hidden_states = inputs_embeds[0]
             kv_list: list[tuple[torch.Tensor, torch.Tensor]] = []
             for layer_idx in range(num_layers):
-                hidden_states, kv = _compute_layer_prefix_only(
+                hidden_states, kv = backbone.execute_prefix_layer(
                     layer_idx,
                     hidden_states,
                     attention_mask,
                     position_ids,
-                    paligemma=self.paligemma,
+                    self.paligemma,
+                    align_module_input=_match,
                 )
                 kv_list.append(kv)
             hidden_states = pali_lm.norm(hidden_states)
@@ -542,56 +430,6 @@ class Pi05ForActionPrediction(nn.Module):
         self.time_mlp_in = nn.Linear(self.expert_width, self.expert_width)
         self.time_mlp_out = nn.Linear(self.expert_width, self.expert_width)
 
-    # ── Prefix embedding ─────────────────────────────────────────────
-    def embed_prefix(
-        self,
-        images: list[torch.Tensor],
-        image_masks: list[torch.Tensor],
-        lang_tokens: torch.Tensor,
-        lang_masks: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Build prefix embeddings, per-token padding mask, and AR mask.
-
-        Prefix tokens form ``[img_cam_0..., ..., lang_tokens...]`` with fully
-        bidirectional attention (all-zero ``att_masks``). Identical to π0 — the
-        state is inside ``lang_tokens``, so nothing here changes shape-wise.
-
-        Cameras are embedded one at a time; each call is ``(B, 3, 224, 224)``.
-        The number of slots is fixed by ``config.max_cameras`` for the deployed
-        model; missing cameras occupy their slot with a false image mask.
-        """
-        num_views = len(images)
-        if len(image_masks) != num_views:
-            raise ValueError(
-                f"images and image_masks must contain the same number of views, got {num_views} and {len(image_masks)}."
-            )
-        max_cameras = int(self.config.max_cameras)
-        if num_views != max_cameras:
-            raise ValueError(f"Expected exactly max_cameras={max_cameras} image views, got {num_views}.")
-
-        embs: list[torch.Tensor] = []
-        pad_masks: list[torch.Tensor] = []
-        att_masks: list[int] = []
-
-        for img, img_mask in zip(images, image_masks):
-            img_emb = self.paligemma_with_expert.embed_image(img)
-            bsize, num_img_embs = img_emb.shape[:2]
-            embs.append(img_emb)
-            pad_masks.append(img_mask[:, None].expand(bsize, num_img_embs))
-            att_masks += [0] * num_img_embs
-
-        lang_emb = self.paligemma_with_expert.embed_language_tokens(lang_tokens)
-        embs.append(lang_emb)
-        pad_masks.append(lang_masks)
-        att_masks += [0] * lang_emb.shape[1]
-
-        embs = torch.cat(embs, dim=1)
-        pad_masks = torch.cat(pad_masks, dim=1)
-        att_masks = torch.tensor(att_masks, dtype=torch.bool, device=embs.device)
-        att_masks = att_masks[None, :].expand(pad_masks.shape[0], -1)
-
-        return embs, pad_masks, att_masks
-
     # ── Timestep + suffix embedding ──────────────────────────────────
     def embed_timestep(self, timestep: torch.Tensor) -> torch.Tensor:
         """Timestep → AdaRMS conditioning vector ``(B, expert_width)``.
@@ -601,7 +439,7 @@ class Pi05ForActionPrediction(nn.Module):
         numerical error, not a crash.
         """
         model_dtype = self.action_in_proj.weight.dtype
-        time_emb = create_sinusoidal_pos_embedding(
+        time_emb = flow_matching.create_sinusoidal_pos_embedding(
             timestep,
             self.action_in_proj.out_features,
             min_period=getattr(self.config, "min_period", 4e-3),
@@ -724,9 +562,17 @@ class Pi05ForActionPrediction(nn.Module):
                     generator=generator,
                 )
 
-        # 1. Prefix embeddings + mask building.
-        prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(
-            images, image_masks, lang_tokens, lang_masks
+        # 1. Compose the ordered camera and language prefix. The deployed
+        # π0.5 layout always retains max_cameras slots; missing cameras occupy
+        # their slot with a false image mask. State is already in lang_tokens.
+        prefix_embs, prefix_pad_masks, prefix_att_masks = backbone.embed_multimodal_prefix(
+            images,
+            image_masks,
+            lang_tokens,
+            lang_masks,
+            embed_image=self.paligemma_with_expert.embed_image,
+            embed_language_tokens=self.paligemma_with_expert.embed_language_tokens,
+            expected_num_views=int(self.config.max_cameras),
         )
         prefix_att_2d_masks = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
         prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
@@ -742,10 +588,8 @@ class Pi05ForActionPrediction(nn.Module):
         )
 
         # 3. Euler-integrated denoising from t=1 down to t=0.
-        dt = -1.0 / num_steps
         x_t = noise
-        for step in range(num_steps):
-            t = 1.0 + step * dt
+        for t, dt in flow_matching.make_euler_schedule(num_steps):
             time_tensor = torch.full((bsize,), t, dtype=torch.float32, device=device)
             v_t = self.denoise_step(
                 prefix_pad_masks=prefix_pad_masks,
@@ -753,7 +597,7 @@ class Pi05ForActionPrediction(nn.Module):
                 x_t=x_t,
                 timestep=time_tensor,
             )
-            x_t = x_t + dt * v_t
+            x_t = flow_matching.euler_step(x_t, v_t, dt)
         return x_t
 
     # ── Weight loading ───────────────────────────────────────────────

@@ -467,7 +467,17 @@ def _diagnose_divergence(lerobot_flow_model, omni_model, images, img_masks, lang
     )
 
     lr_embs, lr_pad, lr_att = lerobot_flow_model.embed_prefix(images, img_masks, lang_tokens, lang_masks)
-    sg_embs, sg_pad, sg_att = omni_model.embed_prefix(images, img_masks, lang_tokens, lang_masks)
+    from vllm_omni.diffusion.models.pi.common import backbone
+
+    sg_embs, sg_pad, sg_att = backbone.embed_multimodal_prefix(
+        images,
+        img_masks,
+        lang_tokens,
+        lang_masks,
+        embed_image=omni_model.paligemma_with_expert.embed_image,
+        embed_language_tokens=omni_model.paligemma_with_expert.embed_language_tokens,
+        expected_num_views=int(omni_model.config.max_cameras),
+    )
     print(f"[diag] prefix_embs max|Δ| = {(lr_embs.float() - sg_embs.float()).abs().max().item():.2e}")
     print(f"[diag] prefix_pad_masks equal: {torch.equal(lr_pad, sg_pad)}")
 
