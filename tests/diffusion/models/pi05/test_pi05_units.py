@@ -57,6 +57,7 @@ from vllm_omni.diffusion.models.pi05.processor_pi05 import (
     tokenize_prompt,
 )
 
+from vllm_omni.diffusion.models.pi.common import backbone
 from vllm_omni.diffusion.models.pi05 import modeling_pi05
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
@@ -819,7 +820,15 @@ def test_prefix_length_is_fixed_and_valid_len_tracks_masks(num_real_views, tiny_
     lang_mask = torch.zeros(1, 200, dtype=torch.bool)
     lang_mask[:, :live_text] = True
 
-    embs, pad_masks, _ = tiny_model.embed_prefix(images, masks, lang, lang_mask)
+    embs, pad_masks, _ = backbone.embed_multimodal_prefix(
+        images,
+        masks,
+        lang,
+        lang_mask,
+        embed_image=tiny_model.paligemma_with_expert.embed_image,
+        embed_language_tokens=tiny_model.paligemma_with_expert.embed_language_tokens,
+        expected_num_views=int(tiny_model.config.max_cameras),
+    )
     assert embs.shape[1] == 256 * 3 + 200
     assert int(pad_masks.sum()) == 256 * num_real_views + live_text
 
