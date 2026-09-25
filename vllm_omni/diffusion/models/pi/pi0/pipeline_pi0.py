@@ -23,6 +23,7 @@ from torch import nn
 from vllm.logger import init_logger
 
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
+from vllm_omni.diffusion.models.pi.common import pipeline as pipeline_helpers
 from vllm_omni.diffusion.models.pi.pi0.config import Pi0Config
 from vllm_omni.diffusion.models.pi.pi0.modeling_pi0 import Pi0ForActionPrediction
 from vllm_omni.diffusion.models.pi.pi0.processor_pi0 import build_model_inputs
@@ -35,19 +36,10 @@ logger = init_logger(__name__)
 DEFAULT_PI0_TOKENIZER = "google/paligemma-3b-pt-224"
 
 
-def _pi0_post_process(x):
-    """Module-level identity post-process (picklable across the orchestrator's
-    multiprocess boundary — a local closure is not)."""
-    return x
-
-
-def get_pi0_post_process_func(od_config: OmniDiffusionConfig):
-    """π0 returns actions directly; post-processing is identity. The diffusion
-    engine resolves this via the registry (``_DIFFUSION_POST_PROCESS_FUNCS``) and
-    applies it engine-side, so the pipeline does NOT attach it to DiffusionOutput.
-    """
-    del od_config
-    return _pi0_post_process
+# The registry imports this public name, and the returned module-level function
+# must remain picklable across the orchestrator's multiprocess boundary.
+_pi0_post_process = pipeline_helpers.identity_post_process
+get_pi0_post_process_func = pipeline_helpers.get_identity_post_process_func
 
 
 class Pi0Pipeline(nn.Module):
@@ -67,15 +59,16 @@ class Pi0Pipeline(nn.Module):
         # otherwise config/tokenizer/weights would silently fall back to random
         # init (this pipeline self-loads from a local dir and has no
         # ``weights_sources`` for the framework loader to download from).
-        self.model_dir = self._resolve_model_dir(od_config.model)
+        self.model_dir = pipeline_helpers.resolve_model_dir(od_config.model)
         self.config = self._build_config(od_config)
 
         custom_args = od_config.custom_pipeline_args or {}
-        self.tokenizer_source = str(custom_args.get("tokenizer", self._resolve_tokenizer_source()))
+        default_tokenizer = pipeline_helpers.resolve_tokenizer_source(self.model_dir, DEFAULT_PI0_TOKENIZER)
+        self.tokenizer_source = str(custom_args.get("tokenizer", default_tokenizer))
 
         # Torch dtype/device from od_config.
         self._torch_dtype = self._resolve_dtype(od_config)
-        self._device = self._resolve_device(od_config)
+        self._device = pipeline_helpers.resolve_device()
 
         self.tokenizer = self._load_tokenizer()
         self.model = self._initialize_model()
@@ -83,24 +76,6 @@ class Pi0Pipeline(nn.Module):
     # ------------------------------------------------------------------
     # Construction helpers
     # ------------------------------------------------------------------
-    @staticmethod
-    def _resolve_model_dir(model: str | None) -> str | None:
-        """Return a local directory for ``model``; download an HF repo id if needed.
-
-        Limits the snapshot to the files π0 actually reads (config, weights,
-        tokenizer) so a repo id doesn't pull unrelated artifacts.
-        """
-        if not model:
-            return None
-        if os.path.isdir(model):
-            return model
-        from vllm_omni.transformers_utils.repo_utils import hf_api
-
-        return hf_api().snapshot_download(
-            repo_id=model,
-            allow_patterns=["*.json", "*.safetensors", "*.model", "tokenizer*"],
-        )
-
     def _build_config(self, od_config: OmniDiffusionConfig) -> Pi0Config:
         """Build Pi0Config from deploy-yaml model_config, falling back to the
         checkpoint's config.json (raw LeRobot format)."""
@@ -122,13 +97,6 @@ class Pi0Pipeline(nn.Module):
             return Pi0Config.from_pretrained(self.model_dir)
         return Pi0Config()
 
-    def _resolve_tokenizer_source(self) -> str:
-        """Prefer the checkpoint dir if it ships tokenizer files; else PaliGemma."""
-        if self.model_dir and os.path.isdir(self.model_dir):
-            if os.path.exists(os.path.join(self.model_dir, "tokenizer_config.json")):
-                return self.model_dir
-        return DEFAULT_PI0_TOKENIZER
-
     @staticmethod
     def _resolve_dtype(od_config: OmniDiffusionConfig) -> torch.dtype:
         dt = od_config.dtype
@@ -136,26 +104,14 @@ class Pi0Pipeline(nn.Module):
             return dt
         return getattr(torch, str(dt).split(".")[-1], torch.float32)
 
-    @staticmethod
-    def _resolve_device(od_config: OmniDiffusionConfig) -> torch.device:
-        from vllm_omni.diffusion.distributed.utils import get_local_device
-
-        try:
-            return get_local_device()
-        except Exception:  # noqa: BLE001
-            return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
     def _load_tokenizer(self):
         from transformers import AutoTokenizer
 
         return AutoTokenizer.from_pretrained(self.tokenizer_source)
 
-    def has_real_checkpoint(self) -> bool:
-        return bool(self.model_dir) and os.path.exists(os.path.join(self.model_dir, "model.safetensors"))
-
     def _initialize_model(self) -> Pi0ForActionPrediction:
         model = Pi0ForActionPrediction(self.config)
-        if self.has_real_checkpoint():
+        if pipeline_helpers.has_safetensors_checkpoint(self.model_dir):
             self._load_checkpoint(model)
         else:
             logger.info("Pi0Pipeline: no model.safetensors under %s; using random init.", self.model_dir)

@@ -42,7 +42,7 @@ from transformers.models.paligemma.modeling_paligemma import (
 )
 from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 
-from vllm_omni.diffusion.models.pi.common import attention, backbone, flow_matching
+from vllm_omni.diffusion.models.pi.common import attention, backbone, checkpoint, flow_matching
 
 logger = logging.getLogger(__name__)
 
@@ -630,46 +630,12 @@ class Pi05ForActionPrediction(nn.Module):
         params_dict = dict(self.named_parameters())
         buffers_dict = dict(self.named_buffers())
 
-        _PALIGEMMA_SUBMODULES = ("vision_tower", "multi_modal_projector", "language_model")
         _EXPERT_PREFIX = "paligemma_with_expert.gemma_expert.model."
-
-        def _remap(name: str) -> str:
-            # Strip the leading "model." that LeRobot's PI05Policy wrapper adds.
-            if name.startswith("model."):
-                name = name[len("model.") :]
-
-            # π0-style timestep MLP names → π0.5 names.
-            if name.startswith("action_time_mlp_in."):
-                name = "time_mlp_in." + name[len("action_time_mlp_in.") :]
-            elif name.startswith("action_time_mlp_out."):
-                name = "time_mlp_out." + name[len("action_time_mlp_out.") :]
-
-            # Nested PaliGemma layout.
-            for sub in _PALIGEMMA_SUBMODULES:
-                flat = f"paligemma_with_expert.paligemma.{sub}."
-                nested = f"paligemma_with_expert.paligemma.model.{sub}."
-                if name.startswith(flat) and not name.startswith(nested):
-                    return nested + name[len(flat) :]
-
-            if name == "paligemma_with_expert.paligemma.lm_head.weight":
-                return "paligemma_with_expert.paligemma.model.language_model.embed_tokens.weight"
-
-            return name
-
-        def _fix_vision_tower(name: str) -> str:
-            """Reconcile SigLIP nesting across transformers versions (≤5.3 wraps
-            the encoder in ``vision_tower.vision_model.*``; ≥5.4 flattens it)."""
-            vt = "paligemma_with_expert.paligemma.model.vision_tower."
-            if not name.startswith(vt):
-                return name
-            rest = name[len(vt) :]
-            if name in params_dict or name in buffers_dict:
-                return name
-            if rest.startswith("vision_model."):
-                candidate = vt + rest[len("vision_model.") :]
-            else:
-                candidate = vt + "vision_model." + rest
-            return candidate if (candidate in params_dict or candidate in buffers_dict) else name
+        model_keys = params_dict.keys() | buffers_dict.keys()
+        prefix_aliases = (
+            ("action_time_mlp_in.", "time_mlp_in."),
+            ("action_time_mlp_out.", "time_mlp_out."),
+        )
 
         loaded = 0
         skipped: list[str] = []
@@ -677,7 +643,7 @@ class Pi05ForActionPrediction(nn.Module):
         filled_params: set = set()
 
         for name, loaded_weight in weights:
-            mapped = _fix_vision_tower(_remap(name))
+            mapped = checkpoint.resolve_parameter_name(name, model_keys, prefix_aliases=prefix_aliases)
 
             # Diagnose π0-shaped keys instead of dropping them quietly.
             is_expert_norm_weight = mapped.startswith(_EXPERT_PREFIX) and (
