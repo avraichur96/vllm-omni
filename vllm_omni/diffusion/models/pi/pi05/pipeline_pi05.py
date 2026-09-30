@@ -32,6 +32,7 @@ from torch import nn
 from vllm.logger import init_logger
 
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
+from vllm_omni.diffusion.models.pi.common import inference_dtype
 from vllm_omni.diffusion.models.pi.common import pipeline as pipeline_helpers
 from vllm_omni.diffusion.models.pi.pi05.config import SUPPORTED_DTYPE_NAMES, Pi05Config
 from vllm_omni.diffusion.models.pi.pi05.modeling_pi05 import Pi05ForActionPrediction
@@ -72,44 +73,6 @@ def _comparable(value):
 # must remain picklable across the orchestrator's multiprocess boundary.
 _pi05_post_process = pipeline_helpers.identity_post_process
 get_pi05_post_process_func = pipeline_helpers.get_identity_post_process_func
-
-
-_LEROBOT_FLOAT32_IN_BFLOAT16 = (
-    "vision_tower",
-    "multi_modal_projector",
-    "input_layernorm",
-    "post_attention_layernorm",
-    "model.norm",
-)
-
-
-def _to_bfloat16_for_inference(model: Pi05ForActionPrediction) -> None:
-    """Apply LeRobot's mixed-precision inference layout explicitly."""
-    inner_model = model.paligemma_with_expert
-    for name, param in inner_model.named_parameters():
-        target_dtype = (
-            torch.float32 if any(selector in name for selector in _LEROBOT_FLOAT32_IN_BFLOAT16) else torch.bfloat16
-        )
-        param.data = param.data.to(dtype=target_dtype)
-    for buffer in inner_model.buffers():
-        if buffer.is_floating_point():
-            buffer.data = buffer.data.to(dtype=torch.bfloat16)
-
-    for name, param in model.named_parameters():
-        if not name.startswith("paligemma_with_expert."):
-            param.data = param.data.to(dtype=torch.float32)
-    for name, buffer in model.named_buffers():
-        if not name.startswith("paligemma_with_expert.") and buffer.is_floating_point():
-            buffer.data = buffer.data.to(dtype=torch.float32)
-
-
-def _set_inference_dtype(model: Pi05ForActionPrediction, dtype: torch.dtype) -> None:
-    if dtype == torch.float32:
-        model.to(dtype=torch.float32)
-    elif dtype == torch.bfloat16:
-        _to_bfloat16_for_inference(model)
-    else:
-        raise ValueError(f"Unsupported π0.5 inference dtype: {dtype!r}.")
 
 
 class Pi05Pipeline(nn.Module):
@@ -196,7 +159,7 @@ class Pi05Pipeline(nn.Module):
             expected = os.path.join(self.model_dir or "<missing-model-dir>", "model.safetensors")
             raise FileNotFoundError(f"π0.5 serving requires checkpoint weights at {expected}.")
         model = Pi05ForActionPrediction(self.config)
-        _set_inference_dtype(model, self._torch_dtype)
+        inference_dtype.apply_pi_inference_dtype(model, self._torch_dtype)
         model.to(device=self._device)
         self._load_checkpoint(model)
         model.eval()

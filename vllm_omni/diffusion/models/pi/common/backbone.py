@@ -111,12 +111,28 @@ def embed_language_tokens(paligemma: nn.Module, tokens: torch.Tensor) -> torch.T
 
     Transformers <=5.3 applies ``sqrt(hidden_size)`` inside ``GemmaModel.forward``
     (which the Pi kernels bypass). In >=5.4 the embedding module self-applies
-    that scale. Detecting ``embed_scale`` prevents both missing and double scale.
+    the scale. Apply it explicitly in the buffer's dtype so FP32 mode retains
+    FP32 arithmetic while mixed-BF16 matches LeRobot's fully cast inner-model
+    buffers.
     """
     embed_tokens = paligemma.model.language_model.embed_tokens
+    embed_scale = getattr(embed_tokens, "embed_scale", None)
+    weight = getattr(embed_tokens, "weight", None)
+    if isinstance(embed_scale, torch.Tensor) and isinstance(weight, torch.Tensor):
+        embeddings = torch.nn.functional.embedding(
+            tokens,
+            weight,
+            getattr(embed_tokens, "padding_idx", None),
+            getattr(embed_tokens, "max_norm", None),
+            getattr(embed_tokens, "norm_type", 2.0),
+            getattr(embed_tokens, "scale_grad_by_freq", False),
+            getattr(embed_tokens, "sparse", False),
+        )
+        return embeddings.to(dtype=embed_scale.dtype) * embed_scale
+
     embeddings = embed_tokens(tokens)
-    if getattr(embed_tokens, "embed_scale", None) is None:
-        embeddings = embeddings * math.sqrt(embeddings.shape[-1])
+    if embed_scale is None:
+        return embeddings * math.sqrt(embeddings.shape[-1])
     return embeddings
 
 
@@ -196,8 +212,7 @@ def execute_prefix_layer(
     The prefix contains ordered image and language tokens and never sees the
     action expert's timestep conditioning. Both Pi variants therefore use the
     stock Gemma residual path here. ``align_module_input`` keeps dtype policy
-    explicit: Pi0 currently preserves inputs, while Pi0.5 aligns inputs with
-    each projection for mixed-dtype checkpoints.
+    explicit at projection boundaries for mixed-dtype checkpoints.
 
     K/V are cached after RoPE with shape
     ``(batch, num_kv_heads, prefix_length, head_dim)``. The model-specific
@@ -252,6 +267,14 @@ def execute_prefix(
 ) -> tuple[torch.Tensor, list[PrefixKV]]:
     """Execute the complete shared PaliGemma prefix and collect its KV cache."""
     language_model = paligemma.model.language_model
+    # LeRobot aligns the complete residual stream with the decoder precision
+    # before layer 0.  This is intentionally earlier than the per-projection
+    # bridges in ``execute_prefix_layer``: RMSNorm and residual additions must
+    # observe the same dtype as the reference model in mixed-BF16 mode.
+    hidden_states = align_module_input(
+        hidden_states,
+        language_model.layers[0].self_attn.q_proj,
+    )
     kv_cache: list[PrefixKV] = []
     for layer_idx in range(len(language_model.layers)):
         hidden_states, layer_kv = execute_prefix_layer(

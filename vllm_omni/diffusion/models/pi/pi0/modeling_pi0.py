@@ -40,7 +40,7 @@ import torch.nn.functional as F
 from transformers.models.gemma.modeling_gemma import apply_rotary_pos_emb
 from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 
-from vllm_omni.diffusion.models.pi.common import attention, backbone, checkpoint, flow_matching
+from vllm_omni.diffusion.models.pi.common import attention, backbone, checkpoint, flow_matching, inference_dtype
 
 logger = logging.getLogger(__name__)
 
@@ -184,6 +184,7 @@ def _compute_layer_suffix_only(
     layer = gemma_expert.model.layers[layer_idx]
     residual = hidden_states
     x = layer.input_layernorm(hidden_states)
+    x = inference_dtype.match_module_input_dtype(x, layer.self_attn.q_proj)
 
     hidden_shape = (*x.shape[:-1], -1, layer.self_attn.head_dim)
     q = layer.self_attn.q_proj(x).view(hidden_shape).transpose(1, 2)
@@ -209,9 +210,12 @@ def _compute_layer_suffix_only(
     )
     att = att.transpose(1, 2).reshape(q.shape[0], -1, q.shape[1] * layer.self_attn.head_dim)
 
+    att = inference_dtype.match_module_input_dtype(att, layer.self_attn.o_proj)
     out = layer.self_attn.o_proj(att) + residual
     after_resid = out
-    out = layer.mlp(layer.post_attention_layernorm(out)) + after_resid
+    x = layer.post_attention_layernorm(out)
+    x = inference_dtype.match_module_input_dtype(x, layer.mlp.up_proj)
+    out = layer.mlp(x) + after_resid
     return out
 
 
@@ -260,6 +264,7 @@ class PaliGemmaWithActionExpert(nn.Module):
                 attention_mask,
                 position_ids,
                 self.paligemma,
+                align_module_input=inference_dtype.match_module_input_dtype,
             )
             return [hidden_states, None], (kv_list if use_cache else None)
 
@@ -276,7 +281,13 @@ class PaliGemmaWithActionExpert(nn.Module):
                 "list[(k, v)] produced by a previous prefix_only forward; "
                 f"got {type(past_key_values)}"
             )
-        hidden_states = inputs_embeds[1]
+        # LeRobot's GemmaModel aligns the complete suffix residual stream with
+        # decoder precision before layer 0, not only the Q/K/V projection
+        # inputs.  Preserve that boundary when walking the layers manually.
+        hidden_states = inference_dtype.match_module_input_dtype(
+            inputs_embeds[1],
+            expert_lm.layers[0].self_attn.q_proj,
+        )
         for layer_idx in range(num_layers):
             hidden_states = _compute_layer_suffix_only(
                 layer_idx,
