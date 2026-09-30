@@ -35,7 +35,7 @@ import torch.nn.functional as F
 from transformers.models.gemma.modeling_gemma import apply_rotary_pos_emb
 from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 
-from vllm_omni.diffusion.models.pi.common import attention, backbone, checkpoint, flow_matching
+from vllm_omni.diffusion.models.pi.common import attention, backbone, checkpoint, flow_matching, inference_dtype
 
 logger = logging.getLogger(__name__)
 
@@ -148,11 +148,6 @@ def _gated_residual(residual: torch.Tensor, out: torch.Tensor, gate: torch.Tenso
 # ──────────────────────────────────────────────────────────────────────
 # Dual-backbone: PaliGemma + AdaRMS action expert
 # ──────────────────────────────────────────────────────────────────────
-def _match(tensor: torch.Tensor, module: nn.Module) -> torch.Tensor:
-    """Cast ``tensor`` to the dtype ``module``'s weight expects."""
-    return tensor.to(module.weight.dtype) if tensor.dtype != module.weight.dtype else tensor
-
-
 def _compute_layer_suffix_only(
     layer_idx,
     hidden_states,
@@ -172,7 +167,7 @@ def _compute_layer_suffix_only(
 
     residual = hidden_states
     x, gate = layer.input_layernorm(hidden_states, adarms_cond)
-    x = _match(x, layer.self_attn.q_proj)
+    x = inference_dtype.match_module_input_dtype(x, layer.self_attn.q_proj)
 
     hidden_shape = (*x.shape[:-1], -1, layer.self_attn.head_dim)
     q = layer.self_attn.q_proj(x).view(hidden_shape).transpose(1, 2)
@@ -198,11 +193,13 @@ def _compute_layer_suffix_only(
     )
     att = att.transpose(1, 2).reshape(q.shape[0], -1, q.shape[1] * layer.self_attn.head_dim)
 
-    hidden_states = _gated_residual(residual, layer.self_attn.o_proj(_match(att, layer.self_attn.o_proj)), gate)
+    att = inference_dtype.match_module_input_dtype(att, layer.self_attn.o_proj)
+    hidden_states = _gated_residual(residual, layer.self_attn.o_proj(att), gate)
 
     residual = hidden_states
     x, gate = layer.post_attention_layernorm(hidden_states, adarms_cond)
-    return _gated_residual(residual, layer.mlp(_match(x, layer.mlp.up_proj)), gate)
+    x = inference_dtype.match_module_input_dtype(x, layer.mlp.up_proj)
+    return _gated_residual(residual, layer.mlp(x), gate)
 
 
 class PaliGemmaWithActionExpertPi05(nn.Module):
@@ -256,7 +253,7 @@ class PaliGemmaWithActionExpertPi05(nn.Module):
                 attention_mask,
                 position_ids,
                 self.paligemma,
-                align_module_input=_match,
+                align_module_input=inference_dtype.match_module_input_dtype,
             )
             return [hidden_states, None], (kv_list if use_cache else None)
 
@@ -271,7 +268,12 @@ class PaliGemmaWithActionExpertPi05(nn.Module):
                 "list[(k, v)] produced by a previous prefix_only forward; "
                 f"got {type(past_key_values)}"
             )
-        hidden_states = inputs_embeds[1]
+        # Match GemmaModel.forward: decoder precision applies to the complete
+        # suffix residual stream from layer 0 onward.
+        hidden_states = inference_dtype.match_module_input_dtype(
+            inputs_embeds[1],
+            expert_lm.layers[0].self_attn.q_proj,
+        )
         for layer_idx in range(num_layers):
             hidden_states = _compute_layer_suffix_only(
                 layer_idx,

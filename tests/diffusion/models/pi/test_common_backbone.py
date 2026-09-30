@@ -224,6 +224,27 @@ def test_embed_language_tokens_does_not_repeat_self_scaling():
     assert torch.equal(actual, torch.full((1, 2, 4), 3.0))
 
 
+def test_embed_language_tokens_keeps_tensor_scale_precision():
+    class StorageDtypeScalingEmbedding(nn.Embedding):
+        def __init__(self):
+            super().__init__(4, 4, dtype=torch.bfloat16)
+            nn.init.constant_(self.weight, 0.125)
+            self.register_buffer("embed_scale", torch.tensor(4.123, dtype=torch.float32))
+
+        def forward(self, tokens):
+            embeddings = super().forward(tokens)
+            return embeddings * self.embed_scale.to(dtype=embeddings.dtype)
+
+    embed_tokens = StorageDtypeScalingEmbedding()
+    paligemma = SimpleNamespace(model=SimpleNamespace(language_model=SimpleNamespace(embed_tokens=embed_tokens)))
+
+    actual = backbone.embed_language_tokens(paligemma, torch.tensor([[0, 1]]))
+    expected = torch.full((1, 2, 4), 0.125, dtype=torch.float32) * embed_tokens.embed_scale
+
+    assert actual.dtype is torch.float32
+    assert torch.equal(actual, expected)
+
+
 def test_execute_prefix_layer_matches_reference_and_returns_post_rope_kv():
     paligemma = _test_paligemma()
     layer = paligemma.model.language_model.layers[0]
@@ -318,3 +339,28 @@ def test_execute_prefix_runs_all_layers_applies_final_norm_and_orders_kv():
     for actual, expected in zip(actual_kv, expected_kv):
         assert torch.equal(actual[0], expected[0])
         assert torch.equal(actual[1], expected[1])
+
+
+def test_execute_prefix_aligns_residual_stream_before_first_layer():
+    paligemma = _test_paligemma()
+    layer = paligemma.model.language_model.layers[0]
+    aligned_modules = []
+
+    def record_alignment(tensor, module):
+        aligned_modules.append(module)
+        return tensor
+
+    backbone.execute_prefix(
+        torch.randn(1, 2, 4),
+        torch.zeros(1, 1, 2, 2),
+        torch.arange(2)[None, :],
+        paligemma,
+        align_module_input=record_alignment,
+    )
+
+    assert aligned_modules == [
+        layer.self_attn.q_proj,
+        layer.self_attn.q_proj,
+        layer.self_attn.o_proj,
+        layer.mlp.up_proj,
+    ]

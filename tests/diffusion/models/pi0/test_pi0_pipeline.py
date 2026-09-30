@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 import torch
 
+from vllm_omni.diffusion.models.pi.common import inference_dtype
 from vllm_omni.diffusion.models.pi.pi0 import pipeline_pi0
 from vllm_omni.diffusion.models.pi.pi0.config import Pi0Config
 
@@ -128,14 +129,14 @@ def test_pipeline_rejects_unsupported_dtypes(configured):
         pipeline_pi0.Pi0Pipeline._resolve_dtype(SimpleNamespace(dtype=configured))
 
 
-@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-def test_pi0_inference_layout_is_homogeneous(dtype):
+def test_pi0_bfloat16_uses_shared_mixed_layout():
     model = _TinyPi0Model()
 
-    pipeline_pi0._set_inference_dtype(model, dtype)
+    inference_dtype.apply_pi_inference_dtype(model, torch.bfloat16)
 
-    assert {parameter.dtype for parameter in model.parameters()} == {dtype}
-    assert {buffer.dtype for buffer in model.buffers() if buffer.is_floating_point()} == {dtype}
+    assert model.paligemma_with_expert.weight.dtype is torch.bfloat16
+    assert model.state_proj.weight.dtype is torch.float32
+    assert model.floating_buffer.dtype is torch.float32
 
 
 def test_bfloat16_layout_is_applied_before_checkpoint_load(monkeypatch, tmp_path):
@@ -157,5 +158,6 @@ def test_bfloat16_layout_is_applied_before_checkpoint_load(monkeypatch, tmp_path
     initialized = pipeline._initialize_model()
 
     assert initialized is model
-    assert set(observed_dtypes.values()) == {torch.bfloat16}
+    assert observed_dtypes["paligemma_with_expert.weight"] is torch.bfloat16
+    assert observed_dtypes["state_proj.weight"] is torch.float32
     assert not initialized.training

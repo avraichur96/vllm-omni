@@ -23,6 +23,7 @@ from torch import nn
 from vllm.logger import init_logger
 
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
+from vllm_omni.diffusion.models.pi.common import inference_dtype
 from vllm_omni.diffusion.models.pi.common import pipeline as pipeline_helpers
 from vllm_omni.diffusion.models.pi.pi0.config import SUPPORTED_DTYPE_NAMES, Pi0Config
 from vllm_omni.diffusion.models.pi.pi0.modeling_pi0 import Pi0ForActionPrediction
@@ -35,8 +36,7 @@ logger = init_logger(__name__)
 # Default tokenizer for the PaliGemma prefix (matches LeRobot Pi0).
 DEFAULT_PI0_TOKENIZER = "google/paligemma-3b-pt-224"
 
-# Pi0 uses a homogeneous model dtype. The denoising state remains float32 and
-# model-bound inputs are cast at their projection/vision boundaries.
+# FP32 remains the default. BF16 uses the shared LeRobot mixed-precision policy.
 SUPPORTED_DTYPES = (torch.float32, torch.bfloat16)
 assert {str(dtype).split(".")[-1] for dtype in SUPPORTED_DTYPES} == set(SUPPORTED_DTYPE_NAMES)
 
@@ -45,13 +45,6 @@ assert {str(dtype).split(".")[-1] for dtype in SUPPORTED_DTYPES} == set(SUPPORTE
 # must remain picklable across the orchestrator's multiprocess boundary.
 _pi0_post_process = pipeline_helpers.identity_post_process
 get_pi0_post_process_func = pipeline_helpers.get_identity_post_process_func
-
-
-def _set_inference_dtype(model: Pi0ForActionPrediction, dtype: torch.dtype) -> None:
-    """Apply Pi0's homogeneous FP32 or BF16 inference layout."""
-    if dtype not in SUPPORTED_DTYPES:
-        raise ValueError(f"Unsupported π0 inference dtype: {dtype!r}.")
-    model.to(dtype=dtype)
 
 
 class Pi0Pipeline(nn.Module):
@@ -127,7 +120,7 @@ class Pi0Pipeline(nn.Module):
 
     def _initialize_model(self) -> Pi0ForActionPrediction:
         model = Pi0ForActionPrediction(self.config)
-        _set_inference_dtype(model, self._torch_dtype)
+        inference_dtype.apply_pi_inference_dtype(model, self._torch_dtype)
         if pipeline_helpers.has_safetensors_checkpoint(self.model_dir):
             self._load_checkpoint(model)
         else:

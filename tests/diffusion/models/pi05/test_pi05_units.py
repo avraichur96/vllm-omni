@@ -1010,10 +1010,10 @@ def test_bfloat16_runs_and_tracks_float32(tiny_model):
             ).float()
 
     reference = run(tiny_model.eval(), torch.float32)
-    from vllm_omni.diffusion.models.pi05.pipeline_pi05 import _set_inference_dtype
+    from vllm_omni.diffusion.models.pi.common import inference_dtype
 
     bf16_model = copy.deepcopy(tiny_model).eval()
-    _set_inference_dtype(bf16_model, torch.bfloat16)
+    inference_dtype.apply_pi_inference_dtype(bf16_model, torch.bfloat16)
 
     # The cast actually happened — otherwise everything below passes trivially.
     assert any(param.dtype is torch.bfloat16 for param in bf16_model.parameters())
