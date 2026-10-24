@@ -36,7 +36,8 @@ logger = init_logger(__name__)
 # Default tokenizer for the PaliGemma prefix (matches LeRobot Pi0).
 DEFAULT_PI0_TOKENIZER = "google/paligemma-3b-pt-224"
 
-# FP32 remains the default. BF16 uses the shared LeRobot mixed-precision policy.
+# The shipped Pi0 deploy config pins FP32. Programmatic callers inherit
+# OmniDiffusionConfig's BF16 default, which uses the shared LeRobot mixed policy.
 SUPPORTED_DTYPES = (torch.float32, torch.bfloat16)
 assert {str(dtype).split(".")[-1] for dtype in SUPPORTED_DTYPES} == set(SUPPORTED_DTYPE_NAMES)
 
@@ -157,6 +158,11 @@ class Pi0Pipeline(nn.Module):
     def forward(self, req: OmniDiffusionRequest, **kwargs) -> DiffusionOutput:
         num_steps = pipeline_helpers.resolve_num_inference_steps(req.sampling_params)
         extra_args = getattr(req.sampling_params, "extra_args", None) or {}
+        if num_steps is None and "num_inference_steps" in extra_args:
+            logger.warning_once(
+                "Pi0Pipeline ignores deprecated sampling_params.extra_args['num_inference_steps']; "
+                "set sampling_params.num_inference_steps instead."
+            )
         robot_obs = extra_args.get("robot_obs")
 
         if robot_obs is None:

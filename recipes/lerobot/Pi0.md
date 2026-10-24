@@ -60,6 +60,11 @@ The deploy config (`vllm_omni/deploy/pi0.yaml`) declares a single diffusion stag
 handshake metadata (3 cameras, `joint_position`, action horizon 50, action dim
 32) that enables the OpenPI realtime serving layer.
 
+FP32 is the default for this shipped deploy config. Programmatic construction
+and custom deploy configs that omit `dtype` inherit `OmniDiffusionConfig`'s
+`bfloat16` default; Pi0 then uses the LeRobot-compatible mixed-BF16 layout.
+Set `dtype: float32` explicitly when a custom configuration must retain FP32.
+
 #### Verification
 
 Run the example client (sends a synthetic observation and prints the returned

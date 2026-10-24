@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 import torch
 
+from vllm_omni.diffusion.data import OmniDiffusionConfig
 from vllm_omni.diffusion.models.pi.common import inference_dtype
 from vllm_omni.diffusion.models.pi.pi0 import pipeline_pi0
 from vllm_omni.diffusion.models.pi.pi0.config import Pi0Config
@@ -94,6 +95,18 @@ def test_top_level_num_inference_steps_is_the_single_source(monkeypatch, request
     assert output.output["actions"].shape == (2, 3)
 
 
+def test_legacy_num_inference_steps_logs_migration_warning(monkeypatch):
+    messages = []
+    monkeypatch.setattr(pipeline_pi0.logger, "warning_once", messages.append)
+
+    _pipeline(monkeypatch, _SpyModel()).forward(_request(None))
+
+    assert messages == [
+        "Pi0Pipeline ignores deprecated sampling_params.extra_args['num_inference_steps']; "
+        "set sampling_params.num_inference_steps instead."
+    ]
+
+
 @pytest.mark.parametrize("bad", [0, -1, 2.5, True, "4"])
 def test_invalid_top_level_num_inference_steps_never_reaches_model(monkeypatch, bad):
     spy = _SpyModel()
@@ -121,6 +134,13 @@ def test_bfloat16_model_output_is_returned_as_float32(monkeypatch):
 )
 def test_pipeline_resolves_supported_dtypes(configured, expected):
     assert pipeline_pi0.Pi0Pipeline._resolve_dtype(SimpleNamespace(dtype=configured)) is expected
+
+
+def test_programmatic_omni_config_default_resolves_to_mixed_bfloat16():
+    config = OmniDiffusionConfig()
+
+    assert config.dtype is torch.bfloat16
+    assert pipeline_pi0.Pi0Pipeline._resolve_dtype(config) is torch.bfloat16
 
 
 @pytest.mark.parametrize("configured", ["float16", "float64", "auto", None])
