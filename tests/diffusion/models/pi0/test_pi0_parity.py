@@ -37,6 +37,8 @@ import os
 import pytest
 import torch
 
+from tests.helpers.mark import hardware_test
+
 # local_model: needs real weights + a lerobot venv (transformers 5.3.0), so it
 # runs locally rather than in the ready-CI (see docs/contributing/ci/CI_5levels.md).
 # Additionally gated on lerobot being importable.
@@ -199,6 +201,7 @@ def _make_fixed_noise(batch_size: int, device: str) -> torch.Tensor:
 
 
 # ─── Main test ────────────────────────────────────────────────────────
+@pytest.mark.cpu
 @pytest.mark.skipif(not _HAS_LEROBOT, reason="lerobot not installed (run in a lerobot venv).")
 def test_pi0_vllm_omni_vs_lerobot():
     print("\n[parity] Instantiating LeRobot…")
@@ -278,6 +281,7 @@ def test_pi0_vllm_omni_vs_lerobot():
 
 
 # ─── Per-stage divergence diagnostics ─────────────────────────────────
+@hardware_test(res={"cuda": "H100"}, num_cards=1)
 @pytest.mark.skipif(not _HAS_LEROBOT, reason="lerobot not installed (run in a lerobot venv).")
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="Pi0 BF16 reference parity requires CUDA.")
 @pytest.mark.parametrize("num_views", [1, 2, 3])
